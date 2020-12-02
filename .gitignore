@@ -1,39 +1,127 @@
-# History files
-.Rhistory
-.Rapp.history
+# 1-下载包
+install.packages('MASS')
+install.packages("MatchIt")
+install.packages('Matching')
+install.packages('gbm')
+install.packages('tableone')
+install.packages('kimisc')
 
-# Session Data files
-.RData
+# 2-加载包
+library(Matching)
+library(tableone)
+library(MASS)
+library(MatchIt)
+library(gbm)
+library(kimisc)
 
-# User-specific files
-.Ruserdata
+# 生成样本总体，1w个样本，为后面做简单随机抽样的抽样总体
+sigma_1 = matrix(c(1,-0.6,-0.6,1),2,2)
+mu_1 = c(0,0)
+goal_x = mvrnorm(n=10000,mu_1,sigma_1)
+goal_d = rep(1,times=10000)
+goal_y = NA
+for(i in 1:10000){goal_y[i]=rnorm(1,goal_x[,1]+0.5*goal_x[,2],1)}
+data_all = cbind(goal_y,goal_x,goal_d)
+goal_all = data.frame(data_all)
+names(goal_all)=c('y','x1','x2','d')
 
-# Example code in package build process
-*-Ex.R
 
-# Output files from R CMD build
-/*.tar.gz
 
-# Output files from R CMD check
-/*.Rcheck/
+mean_1500 = data.frame(matrix(NA,1000,5))  #定义一个空的df，存储重复实验输出的加权均值估计
+for (j in 1:1000)
+{
+# 3-生成数据（对照样本1500）
+sigma_2 = matrix(c(0.4,0.3,0.3,0.35),2,2)
+mu_2 = c(0.8,0.7)
+samp_x = mvrnorm(n=1500,mu_2,sigma_2)
+samp_d = rep(0,times=1500)
+samp_y = NA
+for(i in 1:1500){samp_y[i]=rnorm(1,samp_x[,1]+0.5*samp_x[,2],1)}
+mid_data_s = cbind(samp_y,samp_x,samp_d)
+mid_data_s = data.frame(mid_data_s)
+names(mid_data_s)=c('y','x1','x2','d')
+mid_data = goal_all[sample(nrow(goal_all), 1000), ]  #从总体中简单随机抽取1500个
+load_data = rbind(mid_data,mid_data_s)
+# load_data = data.frame(load_data)
 
-# RStudio files
-.Rproj.user/
+########################################
+#生成数据名称load_data,d为控制组和对照组标示#
+########################################
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
+# 4-gbm计算倾向得分，用gpsvalue匹配
+gps = gbm(d~x1+x2,distribution = 'bernoulli',data = load_data,n.trees = 50,interaction.depth = 4, train.fraction = 0.8,shrinkage = 0.0005)
+load_data$gpsvalue = predict(gps,type = 'response')
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
+logit <- function(p) {log(p)-log(1-p)}
+gpsmatch<-Match(Tr=load_data$d,M=1,X=logit(load_data$gpsvalue),replace=FALSE,caliper=.2)
+gps_matched<-load_data[unlist(gpsmatch[c("index.treated","index.control")]), ]
+xvars<-c("x1","x2") 
+#get standardized differences
+matchedtab1<-CreateTableOne(vars=xvars, strata ="d",data=gps_matched, test = FALSE)
+# print(matchedtab1, smd = TRUE)
+    #此处matchedtable1为利用gbm得分匹配后的样本情况
 
-# knitr and R markdown default cache directories
-*_cache/
-/cache/
 
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
+# 5-logit计算倾向得分，用psvalue匹配
+ps<-glm(d~x1+x2,family=binomial(),data=load_data)
+load_data$psvalue<-ps$fitted.values
 
-# R Environment Variables
-.Renviron
+psmatch<-Match(Tr=load_data$d,M=1,X=logit(load_data$psvalue),replace=FALSE,caliper=.2)
+ps_matched<-load_data[unlist(psmatch[c("index.treated","index.control")]), ]
+xvars<-c("x1","x2")
+#get standardized differences
+matchedtab2<-CreateTableOne(vars=xvars, strata ="d",data=ps_matched, test = FALSE)
+# print(matchedtab2, smd = TRUE)
+            #此处matchedtable2为利用logit得分匹配后的样本情况
+            
+# 6-对比均值估计
+y_all = load_data$y[load_data$d==1]
+y_gps_trt<-gps_matched$y[gps_matched$d==1]
+y_gps_con<-gps_matched$y[gps_matched$d==0]
+y_ps_trt<-ps_matched$y[ps_matched$d==1]
+y_ps_con<-ps_matched$y[ps_matched$d==0]
+
+
+mean_all = mean(y_all)  # 总体分布的均值
+mean_gps = mean(y_gps_con)   #gps匹配回答样本的均值
+mean_ps = mean(y_ps_con)     #logit匹配回答样本的均值
+
+
+#计算权重
+load_data$psw = ps_weight<-ifelse(load_data$d==1,1/(load_data$psvalue),1/(1-load_data$psvalue))
+load_data$gpsw = ps_weight<-ifelse(load_data$d==1,1/(load_data$gpsvalue),1/(1-load_data$gpsvalue))
+
+# 计算加权后的均值估计
+est_gps = sum(load_data$gpsw[load_data$d==0]*load_data$y[load_data$d==0])/(sum(load_data$gpsw[load_data$d==0]))
+est_ps = sum(load_data$psw[load_data$d==0]*load_data$y[load_data$d==0])/(sum(load_data$psw[load_data$d==0]))
+
+mean_1500[j,1] = mean_all
+mean_1500[j,2] = mean_gps
+mean_1500[j,3] = mean_ps
+mean_1500[j,4] = est_gps
+mean_1500[j,5] = est_ps
+print(j)
+}
+
+# print(mean_1500)
+
+result_1500 = data.frame(matrix(NA,3,5))
+RMSE = function(m, o){sqrt(mean((m - o)^2))}
+result_1500[1,1] = mean(mean_1500$X1)
+result_1500[1,2] = mean(mean_1500$X2)
+result_1500[1,3] = mean(mean_1500$X3)
+result_1500[1,4] = mean(mean_1500$X4)
+result_1500[1,5] = mean(mean_1500$X5)
+result_1500[2,1] = sd(mean_1500$X1)
+result_1500[2,2] = sd(mean_1500$X2)
+result_1500[2,3] = sd(mean_1500$X3)
+result_1500[2,4] = sd(mean_1500$X4)
+result_1500[2,5] = sd(mean_1500$X5)
+result_1500[3,2] = RMSE(mean_1500$X1,mean_1500$X2)
+result_1500[3,3] = RMSE(mean_1500$X1,mean_1500$X3)
+result_1500[3,4] = RMSE(mean_1500$X1,mean_1500$X4)
+result_1500[3,5] = RMSE(mean_1500$X1,mean_1500$X5)
+names(result_1500) = c('random_sample','unweight_gps','unweight_ps','weighted_gps','weighted_ps')
+result_1500
+
+
