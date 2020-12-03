@@ -15,15 +15,15 @@ library(gbm)
 library(kimisc)
 
 # 生成样本总体，1w个样本，为后面做简单随机抽样的抽样总体
-sigma_1 = matrix(c(1,-0.6,-0.6,1),2,2)
-mu_1 = c(0,0)
+sigma_1 = matrix(c(1,-0.6,0.2,0.3,-0.6,1,0.25,0.13,0.2,0.25,1,0.1,0.3,0.13,0.1,1),4,4)
+mu_1 = c(0,0,0,0)
 goal_x = mvrnorm(n=10000,mu_1,sigma_1)
 goal_d = rep(1,times=10000)
 goal_y = NA
-for(i in 1:10000){goal_y[i]=rnorm(1,goal_x[,1]+0.5*goal_x[,2],1)}
+for(i in 1:10000){goal_y[i]=rnorm(1,goal_x[,1]+0.5*goal_x[,2]+0.2*goal_x[,3]+goal_x[,4],1)}
 data_all = cbind(goal_y,goal_x,goal_d)
 goal_all = data.frame(data_all)
-names(goal_all)=c('y','x1','x2','d')
+names(goal_all)=c('y','x1','x2','x3','x4','d')
 
 
 
@@ -31,15 +31,15 @@ mean_1500 = data.frame(matrix(NA,1000,5))  #定义一个空的df，存储重复�
 for (j in 1:1000)
 {
 # 3-生成数据（对照样本1500）
-sigma_2 = matrix(c(0.4,0.3,0.3,0.35),2,2)
-mu_2 = c(0.8,0.7)
+sigma_2 = matrix(c(1,0.6,0.2,0.3,0.6,1,0.25,0.13,0.2,0.25,1,0.1,0.3,0.13,0.1,1),4,4)
+mu_2 = c(0.8,0.7,0.2,0.2)
 samp_x = mvrnorm(n=1500,mu_2,sigma_2)
 samp_d = rep(0,times=1500)
 samp_y = NA
-for(i in 1:1500){samp_y[i]=rnorm(1,samp_x[,1]+0.5*samp_x[,2],1)}
+for(i in 1:1500){samp_y[i]=rnorm(1,samp_x[,1]+0.5*samp_x[,2]+0.2*samp_x[,3]+samp_x[,4],1)}
 mid_data_s = cbind(samp_y,samp_x,samp_d)
 mid_data_s = data.frame(mid_data_s)
-names(mid_data_s)=c('y','x1','x2','d')
+names(mid_data_s)=c('y','x1','x2','x3','x4','d')
 mid_data = goal_all[sample(nrow(goal_all), 1000), ]  #从总体中简单随机抽取1500个
 load_data = rbind(mid_data,mid_data_s)
 # load_data = data.frame(load_data)
@@ -49,13 +49,13 @@ load_data = rbind(mid_data,mid_data_s)
 ########################################
 
 # 4-gbm计算倾向得分，用gpsvalue匹配
-gps = gbm(d~x1+x2,distribution = 'bernoulli',data = load_data,n.trees = 50,interaction.depth = 4, train.fraction = 0.8,shrinkage = 0.0005)
+gps = gbm(d~x1+x2+x3+x4,distribution = 'bernoulli',data = load_data,n.trees = 50,interaction.depth = 4, train.fraction = 0.8,shrinkage = 0.0005)
 load_data$gpsvalue = predict(gps,type = 'response')
 
 logit <- function(p) {log(p)-log(1-p)}
 gpsmatch<-Match(Tr=load_data$d,M=1,X=logit(load_data$gpsvalue),replace=FALSE,caliper=.2)
 gps_matched<-load_data[unlist(gpsmatch[c("index.treated","index.control")]), ]
-xvars<-c("x1","x2") 
+xvars<-c("x1","x2","x3","x4") 
 #get standardized differences
 matchedtab1<-CreateTableOne(vars=xvars, strata ="d",data=gps_matched, test = FALSE)
 # print(matchedtab1, smd = TRUE)
@@ -63,12 +63,12 @@ matchedtab1<-CreateTableOne(vars=xvars, strata ="d",data=gps_matched, test = FAL
 
 
 # 5-logit计算倾向得分，用psvalue匹配
-ps<-glm(d~x1+x2,family=binomial(),data=load_data)
+ps<-glm(d~x1+x2+x3+x4,family=binomial(),data=load_data)
 load_data$psvalue<-ps$fitted.values
 
 psmatch<-Match(Tr=load_data$d,M=1,X=logit(load_data$psvalue),replace=FALSE,caliper=.2)
 ps_matched<-load_data[unlist(psmatch[c("index.treated","index.control")]), ]
-xvars<-c("x1","x2")
+xvars<-c("x1","x2","x3","x4")
 #get standardized differences
 matchedtab2<-CreateTableOne(vars=xvars, strata ="d",data=ps_matched, test = FALSE)
 # print(matchedtab2, smd = TRUE)
